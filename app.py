@@ -113,3 +113,28 @@ else:
     for name, row in util.iterrows():
         if row["utilization_%"] > 30:
             st.warning(f"{name} is at {row['utilization_%']}% utilization. Keep it under 30%.")
+
+# ---------- Due date alerts ----------
+from datetime import date
+
+st.header("Upcoming payments")
+today = date.today()
+
+if cards_df.empty:
+    st.info("Add a card to see due dates.")
+else:
+    for row in cards_df.itertuples():
+        due_day = min(row.due_day, 28)  # avoids issues with short months
+        due = date(today.year, today.month, due_day)
+        if due < today:
+            month = today.month % 12 + 1
+            year = today.year + (1 if today.month == 12 else 0)
+            due = date(year, month, due_day)
+        days_left = (due - today).days
+        label = f"{row.nickname} (••{row.last4}): due on {due.strftime('%d %b')} ({days_left} days left)"
+        if days_left <= 3:
+            st.error(label)
+        elif days_left <= 7:
+            st.warning(label)
+        else:
+            st.info(label)
