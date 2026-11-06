@@ -85,3 +85,31 @@ else:
         conn,
     )
     st.dataframe(txns, width="stretch")
+
+# ---------- Dashboard ----------
+st.header("Dashboard")
+all_txns = pd.read_sql(
+    """
+    SELECT c.nickname AS card, t.category, t.amount
+    FROM transactions t JOIN cards c ON c.id = t.card_id
+    """,
+    conn,
+)
+
+if all_txns.empty:
+    st.info("Add some transactions to see charts.")
+else:
+    st.subheader("Spending by category")
+    st.bar_chart(all_txns.groupby("category")["amount"].sum())
+
+    st.subheader("Credit utilization")
+    spent = all_txns.groupby("card")["amount"].sum().rename("spent")
+    util = cards_df.set_index("nickname")[["credit_limit"]].join(spent).fillna(0)
+    util["utilization_%"] = (
+        util["spent"] / util["credit_limit"].replace(0, float("nan")) * 100
+    ).round(1)
+    st.dataframe(util, width="stretch")
+
+    for name, row in util.iterrows():
+        if row["utilization_%"] > 30:
+            st.warning(f"{name} is at {row['utilization_%']}% utilization. Keep it under 30%.")
