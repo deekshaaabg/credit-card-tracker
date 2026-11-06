@@ -12,11 +12,23 @@ CREATE TABLE IF NOT EXISTS cards (
     due_day INTEGER NOT NULL
 )
 """)
+conn.execute("""
+CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id INTEGER NOT NULL,
+    amount REAL NOT NULL,
+    category TEXT NOT NULL,
+    txn_date TEXT NOT NULL,
+    FOREIGN KEY (card_id) REFERENCES cards(id)
+)
+""")
 conn.commit()
 
 st.title("Credit Card Tracker")
 
+# ---------- Add card ----------
 with st.form("add_card", clear_on_submit=True):
+    st.subheader("Add a card")
     nickname = st.text_input("Card nickname (e.g. HDFC Regalia)")
     last4 = st.text_input("Last 4 digits only", max_chars=4)
     limit = st.number_input("Credit limit (₹)", min_value=0.0, step=1000.0)
@@ -35,5 +47,41 @@ if submitted:
         st.error("Enter a nickname and exactly 4 digits.")
 
 st.subheader("Your cards")
-df = pd.read_sql("SELECT nickname, last4, credit_limit, due_day FROM cards", conn)
-st.dataframe(df, width="stretch")
+cards_df = pd.read_sql("SELECT id, nickname, last4, credit_limit, due_day FROM cards", conn)
+st.dataframe(cards_df.drop(columns="id"), width="stretch")
+
+# ---------- Add transaction ----------
+st.header("Transactions")
+if cards_df.empty:
+    st.info("Add a card first.")
+else:
+    options = {f"{r.nickname} (••{r.last4})": int(r.id) for r in cards_df.itertuples()}
+    with st.form("add_txn", clear_on_submit=True):
+        card_label = st.selectbox("Card", list(options.keys()))
+        amount = st.number_input("Amount (₹)", min_value=0.0, step=100.0)
+        category = st.selectbox(
+            "Category", ["Food", "Shopping", "Travel", "Bills", "Fuel", "Entertainment", "Other"]
+        )
+        txn_date = st.date_input("Date")
+        txn_submitted = st.form_submit_button("Add transaction")
+
+    if txn_submitted:
+        if amount > 0:
+            conn.execute(
+                "INSERT INTO transactions (card_id, amount, category, txn_date) VALUES (?, ?, ?, ?)",
+                (options[card_label], amount, category, str(txn_date)),
+            )
+            conn.commit()
+            st.success("Transaction added!")
+        else:
+            st.error("Amount must be more than 0.")
+
+    txns = pd.read_sql(
+        """
+        SELECT t.txn_date AS date, c.nickname AS card, t.category, t.amount
+        FROM transactions t JOIN cards c ON c.id = t.card_id
+        ORDER BY t.txn_date DESC
+        """,
+        conn,
+    )
+    st.dataframe(txns, width="stretch")
