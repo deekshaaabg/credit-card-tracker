@@ -1,28 +1,42 @@
-import sqlite3
+from datetime import date
+
 import pandas as pd
 import streamlit as st
+from sqlalchemy import create_engine, text
 
-conn = sqlite3.connect("cards.db", check_same_thread=False)
-conn.execute("""
-CREATE TABLE IF NOT EXISTS cards (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nickname TEXT NOT NULL,
-    last4 TEXT NOT NULL,
-    credit_limit REAL NOT NULL,
-    due_day INTEGER NOT NULL
-)
-""")
-conn.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    card_id INTEGER NOT NULL,
-    amount REAL NOT NULL,
-    category TEXT NOT NULL,
-    txn_date TEXT NOT NULL,
-    FOREIGN KEY (card_id) REFERENCES cards(id)
-)
-""")
-conn.commit()
+
+@st.cache_resource
+def get_engine():
+    return create_engine(st.secrets["db"]["url"], pool_pre_ping=True)
+
+
+engine = get_engine()
+
+with engine.begin() as conn:
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS cards (
+            id SERIAL PRIMARY KEY,
+            nickname TEXT NOT NULL,
+            last4 TEXT NOT NULL,
+            credit_limit DOUBLE PRECISION NOT NULL,
+            due_day INTEGER NOT NULL
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            card_id INTEGER NOT NULL REFERENCES cards(id),
+            amount DOUBLE PRECISION NOT NULL,
+            category TEXT NOT NULL,
+            txn_date TEXT NOT NULL
+        )
+    """))
+
+
+def query(sql):
+    with engine.connect() as conn:
+        return pd.read_sql(text(sql), conn)
+
 
 st.title("Credit Card Tracker")
 
@@ -37,20 +51,21 @@ with st.form("add_card", clear_on_submit=True):
 
 if submitted:
     if nickname and last4.isdigit() and len(last4) == 4:
-        conn.execute(
-            "INSERT INTO cards (nickname, last4, credit_limit, due_day) VALUES (?, ?, ?, ?)",
-            (nickname, last4, limit, int(due_day)),
-        )
-        conn.commit()
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO cards (nickname, last4, credit_limit, due_day) "
+                     "VALUES (:n, :l, :c, :d)"),
+                {"n": nickname, "l": last4, "c": float(limit), "d": int(due_day)},
+            )
         st.success("Card added!")
     else:
         st.error("Enter a nickname and exactly 4 digits.")
 
 st.subheader("Your cards")
-cards_df = pd.read_sql("SELECT id, nickname, last4, credit_limit, due_day FROM cards", conn)
+cards_df = query("SELECT id, nickname, last4, credit_limit, due_day FROM cards ORDER BY id")
 st.dataframe(cards_df.drop(columns="id"), width="stretch")
 
-# ---------- Add transaction ----------
+# ---------- Transactions ----------
 st.header("Transactions")
 if cards_df.empty:
     st.info("Add a card first.")
@@ -67,34 +82,30 @@ else:
 
     if txn_submitted:
         if amount > 0:
-            conn.execute(
-                "INSERT INTO transactions (card_id, amount, category, txn_date) VALUES (?, ?, ?, ?)",
-                (options[card_label], amount, category, str(txn_date)),
-            )
-            conn.commit()
+            with engine.begin() as conn:
+                conn.execute(
+                    text("INSERT INTO transactions (card_id, amount, category, txn_date) "
+                         "VALUES (:cid, :a, :cat, :d)"),
+                    {"cid": options[card_label], "a": float(amount),
+                     "cat": category, "d": str(txn_date)},
+                )
             st.success("Transaction added!")
         else:
             st.error("Amount must be more than 0.")
 
-    txns = pd.read_sql(
-        """
+    txns = query("""
         SELECT t.txn_date AS date, c.nickname AS card, t.category, t.amount
         FROM transactions t JOIN cards c ON c.id = t.card_id
         ORDER BY t.txn_date DESC
-        """,
-        conn,
-    )
+    """)
     st.dataframe(txns, width="stretch")
 
 # ---------- Dashboard ----------
 st.header("Dashboard")
-all_txns = pd.read_sql(
-    """
+all_txns = query("""
     SELECT c.nickname AS card, t.category, t.amount
     FROM transactions t JOIN cards c ON c.id = t.card_id
-    """,
-    conn,
-)
+""")
 
 if all_txns.empty:
     st.info("Add some transactions to see charts.")
@@ -115,8 +126,6 @@ else:
             st.warning(f"{name} is at {row['utilization_%']}% utilization. Keep it under 30%.")
 
 # ---------- Due date alerts ----------
-from datetime import date
-
 st.header("Upcoming payments")
 today = date.today()
 
@@ -124,7 +133,7 @@ if cards_df.empty:
     st.info("Add a card to see due dates.")
 else:
     for row in cards_df.itertuples():
-        due_day = min(row.due_day, 28)  # avoids issues with short months
+        due_day = min(row.due_day, 28)
         due = date(today.year, today.month, due_day)
         if due < today:
             month = today.month % 12 + 1
