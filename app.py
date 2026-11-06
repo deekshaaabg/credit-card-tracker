@@ -1,8 +1,10 @@
 from datetime import date
 
+import bcrypt
 import pandas as pd
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 
 @st.cache_resource
@@ -14,6 +16,13 @@ engine = get_engine()
 
 with engine.begin() as conn:
     conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL
+        )
+    """))
+    conn.execute(text("""
         CREATE TABLE IF NOT EXISTS cards (
             id SERIAL PRIMARY KEY,
             nickname TEXT NOT NULL,
@@ -22,6 +31,9 @@ with engine.begin() as conn:
             due_day INTEGER NOT NULL
         )
     """))
+    conn.execute(text(
+        "ALTER TABLE cards ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id)"
+    ))
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS transactions (
             id SERIAL PRIMARY KEY,
@@ -33,12 +45,84 @@ with engine.begin() as conn:
     """))
 
 
-def query(sql):
+def query(sql, params=None):
     with engine.connect() as conn:
-        return pd.read_sql(text(sql), conn)
+        return pd.read_sql(text(sql), conn, params=params or {})
+
+
+def sign_up(username, password):
+    if len(username) < 3 or len(password) < 8:
+        return "Username needs 3+ characters and password needs 8+."
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO users (username, password_hash) VALUES (:u, :p)"),
+                {"u": username.strip().lower(), "p": hashed},
+            )
+        return None
+    except IntegrityError:
+        return "That username is already taken."
+
+
+def log_in(username, password):
+    df = query(
+        "SELECT id, username, password_hash FROM users WHERE username = :u",
+        {"u": username.strip().lower()},
+    )
+    if df.empty:
+        return None
+    row = df.iloc[0]
+    if bcrypt.checkpw(password.encode(), row["password_hash"].encode()):
+        return {"id": int(row["id"]), "username": row["username"]}
+    return None
 
 
 st.title("Credit Card Tracker")
+
+# ---------- Login / Sign up ----------
+if "user" not in st.session_state:
+    login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
+
+    with login_tab:
+        with st.form("login"):
+            u = st.text_input("Username")
+            p = st.text_input("Password", type="password")
+            login_clicked = st.form_submit_button("Log in")
+        if login_clicked:
+            found = log_in(u, p)
+            if found:
+                st.session_state.user = found
+                st.rerun()
+            else:
+                st.error("Wrong username or password.")
+
+    with signup_tab:
+        with st.form("signup"):
+            new_u = st.text_input("Choose a username")
+            new_p = st.text_input("Choose a password (8+ characters)", type="password")
+            new_p2 = st.text_input("Confirm password", type="password")
+            signup_clicked = st.form_submit_button("Create account")
+        if signup_clicked:
+            if new_p != new_p2:
+                st.error("Passwords don't match.")
+            else:
+                problem = sign_up(new_u, new_p)
+                if problem:
+                    st.error(problem)
+                else:
+                    st.success("Account created! Go to the Log in tab.")
+
+    st.stop()
+
+# ---------- Logged-in app ----------
+user = st.session_state.user
+uid = user["id"]
+
+st.sidebar.write(f"Logged in as **{user['username']}**")
+if st.sidebar.button("Log out"):
+    st.session_state.clear()
+    st.rerun()
 
 # ---------- Add card ----------
 with st.form("add_card", clear_on_submit=True):
@@ -53,16 +137,21 @@ if submitted:
     if nickname and last4.isdigit() and len(last4) == 4:
         with engine.begin() as conn:
             conn.execute(
-                text("INSERT INTO cards (nickname, last4, credit_limit, due_day) "
-                     "VALUES (:n, :l, :c, :d)"),
-                {"n": nickname, "l": last4, "c": float(limit), "d": int(due_day)},
+                text("INSERT INTO cards (nickname, last4, credit_limit, due_day, user_id) "
+                     "VALUES (:n, :l, :c, :d, :uid)"),
+                {"n": nickname, "l": last4, "c": float(limit),
+                 "d": int(due_day), "uid": uid},
             )
         st.success("Card added!")
     else:
         st.error("Enter a nickname and exactly 4 digits.")
 
 st.subheader("Your cards")
-cards_df = query("SELECT id, nickname, last4, credit_limit, due_day FROM cards ORDER BY id")
+cards_df = query(
+    "SELECT id, nickname, last4, credit_limit, due_day FROM cards "
+    "WHERE user_id = :uid ORDER BY id",
+    {"uid": uid},
+)
 st.dataframe(cards_df.drop(columns="id"), width="stretch")
 
 # ---------- Transactions ----------
@@ -93,19 +182,27 @@ else:
         else:
             st.error("Amount must be more than 0.")
 
-    txns = query("""
+    txns = query(
+        """
         SELECT t.txn_date AS date, c.nickname AS card, t.category, t.amount
         FROM transactions t JOIN cards c ON c.id = t.card_id
+        WHERE c.user_id = :uid
         ORDER BY t.txn_date DESC
-    """)
+        """,
+        {"uid": uid},
+    )
     st.dataframe(txns, width="stretch")
 
 # ---------- Dashboard ----------
 st.header("Dashboard")
-all_txns = query("""
+all_txns = query(
+    """
     SELECT c.nickname AS card, t.category, t.amount
     FROM transactions t JOIN cards c ON c.id = t.card_id
-""")
+    WHERE c.user_id = :uid
+    """,
+    {"uid": uid},
+)
 
 if all_txns.empty:
     st.info("Add some transactions to see charts.")
