@@ -6,6 +6,26 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+st.set_page_config(page_title="Credit Card Tracker", page_icon="💳", layout="centered")
+
+st.markdown("""
+<style>
+#MainMenu, footer {visibility: hidden;}
+[data-testid="stForm"] {
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 16px;
+    padding: 1.5rem;
+    background: rgba(255,255,255,0.03);
+}
+[data-testid="stFormSubmitButton"] button {
+    width: 100%;
+    border-radius: 10px;
+    font-weight: 600;
+    padding: 0.6rem 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 @st.cache_resource
 def get_engine():
@@ -78,16 +98,49 @@ def log_in(username, password):
     return None
 
 
-st.title("Credit Card Tracker")
-
 # ---------- Login / Sign up ----------
 if "user" not in st.session_state:
-    login_tab, signup_tab = st.tabs(["Log in", "Sign up"])
+    st.markdown("""
+    <style>
+    .block-container {max-width: 520px; padding-top: 3rem;}
+    .hero {text-align: center; margin-bottom: 1rem;}
+    .hero .icon {font-size: 3.2rem;}
+    .hero h1 {
+        background: linear-gradient(90deg, #7C5CFF, #00C6FF);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800;
+        margin: 0.2rem 0;
+        padding: 0;
+    }
+    .hero p {color: #9AA4B2; margin: 0;}
+    .chips {display: flex; justify-content: center; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0 1.5rem;}
+    .chip {
+        padding: 0.25rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(124,92,255,0.15);
+        color: #C9BFFF;
+        font-size: 0.8rem;
+    }
+    </style>
+    <div class="hero">
+        <div class="icon">💳</div>
+        <h1>Credit Card Tracker</h1>
+        <p>Track spending, utilization and due dates in one place.</p>
+    </div>
+    <div class="chips">
+        <span class="chip">📊 Spending charts</span>
+        <span class="chip">💳 Utilization alerts</span>
+        <span class="chip">🗓️ Due dates</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    login_tab, signup_tab = st.tabs(["🔑 Log in", "✨ Sign up"])
 
     with login_tab:
         with st.form("login"):
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
+            u = st.text_input("Username", placeholder="your username")
+            p = st.text_input("Password", type="password", placeholder="••••••••")
             login_clicked = st.form_submit_button("Log in")
         if login_clicked:
             found = log_in(u, p)
@@ -99,9 +152,9 @@ if "user" not in st.session_state:
 
     with signup_tab:
         with st.form("signup"):
-            new_u = st.text_input("Choose a username")
-            new_p = st.text_input("Choose a password (8+ characters)", type="password")
-            new_p2 = st.text_input("Confirm password", type="password")
+            new_u = st.text_input("Choose a username", placeholder="at least 3 characters")
+            new_p = st.text_input("Choose a password", type="password", placeholder="at least 8 characters")
+            new_p2 = st.text_input("Confirm password", type="password", placeholder="repeat the password")
             signup_clicked = st.form_submit_button("Create account")
         if signup_clicked:
             if new_p != new_p2:
@@ -113,9 +166,12 @@ if "user" not in st.session_state:
                 else:
                     st.success("Account created! Go to the Log in tab.")
 
+    st.caption("Demo project: please use fake card data and a throwaway password.")
     st.stop()
 
 # ---------- Logged-in app ----------
+st.title("💳 Credit Card Tracker")
+
 user = st.session_state.user
 uid = user["id"]
 
